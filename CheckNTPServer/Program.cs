@@ -17,26 +17,34 @@ internal class Program
             Environment.Exit(1);
         }
 
-        var secondsDiff = 3;
+        var millisDiff = 3000;
 
-        Console.WriteLine($"Pulsa una tecla si quieres cambiar la diferencia mínima en segundos que debe haber para superar el umbral aceptable entre la fecha remota y la loca. Hora mismo configurada en {secondsDiff} segundos.");
+        Console.WriteLine();
+        Console.WriteLine($"Pulsa una tecla si quieres cambiar la diferencia mínima en milisegundos que debe haber para superar el umbral aceptable entre la fecha remota y la loca. Ahora mismo configurada en {millisDiff} milisegundos.");
 
-        Thread.Sleep(3000);
-        var keyAvailable = Console.KeyAvailable;
+        bool keyAvailable = false;
+        int seconds = 0;
+
+        do {
+            Thread.Sleep(100);
+            seconds++;
+            keyAvailable = Console.KeyAvailable;
+        } while (seconds < 30 && !keyAvailable);
 
         if (keyAvailable)
         {
+            Console.ReadKey(true);
             var value = -1;
             while (value < 0)
             {
-                Console.WriteLine("Segundos de diferencia permitidos (valor absoluto): ");
+                Console.WriteLine("*Milisegundos de diferencia permitidos (valor absoluto): ");
                 var cValue = Console.ReadLine();
 
                 if (!int.TryParse(cValue, out value))
                     value = -1;
             }
-            secondsDiff = value;
-            File.AppendAllText(regFile, $"Se ha indicado un valor de umbral aceptable de {secondsDiff} segundos.{Environment.NewLine}");
+            millisDiff = value;
+            File.AppendAllText(regFile, $"Se ha indicado un valor de umbral aceptable de {millisDiff} milisegundos.{Environment.NewLine}");
         }   
         
         bool error = false;
@@ -54,10 +62,10 @@ internal class Program
         {
             var networkTime = GetNetworkTime(DateTimeOffset.Now.Offset);
             var nowTime = DateTime.Now;
-            var diff = Math.Abs((networkTime - nowTime).TotalSeconds);
-            if (diff >= secondsDiff)
+            var diff = Math.Abs((networkTime - nowTime).TotalMilliseconds);
+            if (diff >= millisDiff)
             {
-                msg = $"Cuidado! la diferencia entre fecha local y remota es demasiada! Local: {nowTime}, Remota: {networkTime}. Diferencia: {diff} segundos.{Environment.NewLine}";
+                msg = $"Cuidado! la diferencia entre fecha local y remota es demasiada! Local: {nowTime}, Remota: {networkTime}. Diferencia: {diff} milisegundos.{Environment.NewLine}";
                 Console.Write(msg);
                 if (!error)
                 {
