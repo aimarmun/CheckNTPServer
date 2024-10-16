@@ -3,83 +3,45 @@ using System.Net;
 
 internal class Program
 {
+    public static string RegFile { get; set; } = "registros.log";
+    public static string? NtpServer { get; set; }
+    public static int MaxMillisOfDiff { get; set; } = 3000;
+
     private static void Main(string[] args)
     {
-        string regFile = "registros.log";
-        Console.WriteLine("Watchdog para la supervision de servicios NTP by Aimarmun 2024.");
-        if (args.Length == 0)
-        {
-            Console.WriteLine("Se require al menos un argumento que indique el servidor NTP. Ejemplo:");
-            Console.WriteLine("\tCheckNTPServer ntp.tuhora.com");
-            Console.WriteLine();
-            Console.WriteLine($"Se admite un segundo argumento, el nombre del archivo de salida de registro. Si no se especifica sera {regFile}. Ejemplo:");
-            Console.WriteLine("\tCheckNTPServer ntp.tuhora.com registrosTuhoraCom.log");
-            Environment.Exit(1);
-        }
-
-        var millisDiff = 3000;
-
-        Console.WriteLine();
-        Console.WriteLine($"Pulsa una tecla si quieres cambiar la diferencia mínima en milisegundos que debe haber para superar el umbral aceptable entre la fecha remota y la loca. Ahora mismo configurada en {millisDiff} milisegundos.");
-
-        bool keyAvailable = false;
-        int seconds = 0;
-
-        do {
-            Thread.Sleep(100);
-            seconds++;
-            keyAvailable = Console.KeyAvailable;
-        } while (seconds < 30 && !keyAvailable);
-
-        if (keyAvailable)
-        {
-            Console.ReadKey(true);
-            var value = -1;
-            while (value < 0)
-            {
-                Console.WriteLine("*Milisegundos de diferencia permitidos (valor absoluto): ");
-                var cValue = Console.ReadLine();
-
-                if (!int.TryParse(cValue, out value))
-                    value = -1;
-            }
-            millisDiff = value;
-            File.AppendAllText(regFile, $"Se ha indicado un valor de umbral aceptable de {millisDiff} milisegundos.{Environment.NewLine}");
-        }   
         
+        Console.WriteLine("Watchdog para la supervision de servicios NTP by Aimarmun 2024.");
+
+        ReadAndValidateArguments(args);
+
+        WriteConfigInfile();
+
         bool error = false;
         string msg = "";
-        string ntpServer = args[0];
 
-        if (args.Length > 1)
-        {
-            regFile = args[1];
-            Console.WriteLine($"Se usara el archivo de registro {regFile}.");
-        }
-
-        File.AppendAllText(regFile, $"{DateTime.Now} Inicio de aplicación. Servidor {ntpServer}.{Environment.NewLine}");
         while (true)
         {
             var networkTime = GetNetworkTime(DateTimeOffset.Now.Offset);
             var nowTime = DateTime.Now;
             var diff = Math.Abs((networkTime - nowTime).TotalMilliseconds);
-            if (diff >= millisDiff)
+            if (diff >= MaxMillisOfDiff)
             {
-                msg = $"Cuidado! la diferencia entre fecha local y remota es demasiada! Local: {nowTime}, Remota: {networkTime}. Diferencia: {diff} milisegundos.{Environment.NewLine}";
+                msg = $"Cuidado! Se ha pasado el umbral permitido! Local: {nowTime}, Remota: {networkTime}. Diferencia: {diff} milisegundos.{Environment.NewLine}";
                 Console.Write(msg);
                 if (!error)
                 {
-                    File.AppendAllText(regFile, msg);
+                    File.AppendAllText(RegFile, msg);
+                    File.AppendAllLines(RegFile, new[] { "Se volverá a escribir otro mensaje cuando se vuelva al umbral aceptable" });
                 }
                 error = true;
             }
             else
             {
-                msg = $"Local: {nowTime}, Remota: {networkTime} OK.{Environment.NewLine}";
+                msg = $"Local: {nowTime}, Remota: {networkTime} OK. {diff}ms.{Environment.NewLine}";
                 if (error)
                 {
-                    File.AppendAllText(regFile, $"La hora vuelve a coincidir{Environment.NewLine}");
-                    File.AppendAllText(regFile, msg);
+                    File.AppendAllText(RegFile, $"La hora vuelve a mantener el umbral aceptable.{Environment.NewLine}");
+                    File.AppendAllText(RegFile, msg);
                 }
                 error = false;
                 Console.Write(msg);
@@ -87,28 +49,91 @@ internal class Program
             Thread.Sleep(1000);
         }
 
-        DateTime GetNetworkTime(TimeSpan offset)
+    }
+
+    private static void WriteConfigInfile()
+    {
+        var lines = new[]
         {
-            
-            var ntpData = new byte[48];
-            ntpData[0] = 0x1B; //LeapIndicator = 0 (no warning), VersionNum = 3 (IPv4 only), Mode = 3 (Client Mode)
+            $"Inicio de la aplicación {DateTime.Now}.",
+            "Configuración:",
+            $"  Servidor: {NtpServer}",
+            $"  Umbral aceptable: {MaxMillisOfDiff}ms"
+        };
+        File.AppendAllLines(RegFile, lines);
+    }
 
-            var addresses = Dns.GetHostEntry(ntpServer).AddressList;
-            var ipEndPoint = new IPEndPoint(addresses[0], 123);
-            var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+    public static void ReadAndValidateArguments(string[] args)
+    {
+        if (args.Length == 0) PrintHelpAndExit();
+        if (args.LastOrDefault(a => a.Equals("-h")) != null) PrintHelpAndExit();
 
-            socket.Connect(ipEndPoint);
-            socket.Send(ntpData);
-            socket.Receive(ntpData);
-            socket.Close();
+        NtpServer = args.LastOrDefault(a => a.StartsWith("-s"))?.Substring(2);
 
-            ulong intPart = (ulong)ntpData[40] << 24 | (ulong)ntpData[41] << 16 | (ulong)ntpData[42] << 8 | ntpData[43];
-            ulong fractPart = (ulong)ntpData[44] << 24 | (ulong)ntpData[45] << 16 | (ulong)ntpData[46] << 8 | ntpData[47];
+        if (string.IsNullOrEmpty(NtpServer)) PrintHelpAndExit();
 
-            var milliseconds = intPart * 1000 + fractPart * 1000 / 0x100000000L;
-            var networkDateTime = new DateTime(1900, 1, 1).AddMilliseconds((long)milliseconds);
+        RegFile = args.LastOrDefault(a => a.StartsWith("-r"))?.Substring(2) ?? RegFile;
 
-            return networkDateTime + offset;
+        var maxMillisOfDiff = args.LastOrDefault(a => a.StartsWith("-d"))?.Substring(2);
+
+        if (!string.IsNullOrEmpty(maxMillisOfDiff))
+        {
+            int result;
+            if (!int.TryParse(maxMillisOfDiff, out result)) PrintHelpAndExit();
+            if (result < 1) PrintHelpAndExit();
+            MaxMillisOfDiff = result;
         }
+    }
+
+    private static void PrintHelpAndExit()
+    {
+        var lines = new[]
+        {
+            "Argumentos soportados:",
+            "  -s<servidor>    Indica el servidor de hora a supervisar [obligatorio]",
+            "",
+            "  -r<archivo>     Indica el archivo donde se escribiran los registros de la aplicación [opcional]. Por defecto \"registros.log\"",
+            "",
+            "  -d<m.segundos>  Umbral para dar por bueno el dato de la hora, superado este umbral se escribirá una incidencia en el registro. Tambien se escribirá en el registro si se ha vuelto al umbral aceptable.[opcional]. Por defecto 3000ms. El valor tiene que ser mayor de 1",
+            "",
+            "  -h              Muestra esta ayuda.",
+            "",
+            "Se require al menos el argumento \"-s\" que indica el servidor NTP. Ejemplo:",
+            "  >CheckNTPServer.exe -sntp.tuhora.com",
+            "",
+            "Ejemplo utilizando todas las opciones:",
+            "  >CheckNTPServer.exe -sntp.tuhora.com -rRegistroTuHora.log -d1000"
+        };
+
+        foreach(string line in lines)
+        {
+            Console.WriteLine(line);
+        }
+   
+        Environment.Exit(1);
+    }
+
+    public static DateTime GetNetworkTime(TimeSpan offset)
+    {
+
+        var ntpData = new byte[48];
+        ntpData[0] = 0x1B; //LeapIndicator = 0 (no warning), VersionNum = 3 (IPv4 only), Mode = 3 (Client Mode)
+
+        var addresses = Dns.GetHostEntry(NtpServer ?? "").AddressList;
+        var ipEndPoint = new IPEndPoint(addresses[0], 123);
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+
+        socket.Connect(ipEndPoint);
+        socket.Send(ntpData);
+        socket.Receive(ntpData);
+        socket.Close();
+
+        ulong intPart = (ulong)ntpData[40] << 24 | (ulong)ntpData[41] << 16 | (ulong)ntpData[42] << 8 | ntpData[43];
+        ulong fractPart = (ulong)ntpData[44] << 24 | (ulong)ntpData[45] << 16 | (ulong)ntpData[46] << 8 | ntpData[47];
+
+        var milliseconds = intPart * 1000 + fractPart * 1000 / 0x100000000L;
+        var networkDateTime = new DateTime(1900, 1, 1).AddMilliseconds((long)milliseconds);
+
+        return networkDateTime + offset;
     }
 }

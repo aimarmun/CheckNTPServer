@@ -2,7 +2,7 @@
   "profiles": {
     "CheckNTPServer": {
       "commandName": "Project",
-      "commandLineArgs": "10.168.4.1"
+      "commandLineArgs": "-s10.168.4.1"
     }
   }
 }
