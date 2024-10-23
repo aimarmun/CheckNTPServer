@@ -21,32 +21,42 @@ internal class Program
 
         while (true)
         {
-            var networkTime = GetNetworkTime(DateTimeOffset.Now.Offset);
-            var nowTime = DateTime.Now;
-            var diff = Math.Abs((networkTime - nowTime).TotalMilliseconds);
-            if (diff >= MaxMillisOfDiff)
+            try
             {
-                msg = $"Cuidado! Se ha pasado el umbral permitido! Local: {nowTime}, Remota: {networkTime}. Diferencia: {diff} milisegundos.{Environment.NewLine}";
-                Console.Write(msg);
-                if (!error)
+                var networkTime = GetNetworkTime(DateTimeOffset.Now.Offset, 3000);
+                var nowTime = DateTime.Now;
+                var diff = Math.Abs((networkTime - nowTime).TotalMilliseconds);
+                if (diff >= MaxMillisOfDiff)
                 {
-                    File.AppendAllText(RegFile, msg);
-                    File.AppendAllLines(RegFile, new[] { "Se volverá a escribir otro mensaje cuando se vuelva al umbral aceptable" });
+                    msg = $"Cuidado! Se ha pasado el umbral permitido! Local: {nowTime}, Remota: {networkTime}. Diferencia: {diff} milisegundos.{Environment.NewLine}";
+                    Console.Write(msg);
+                    if (!error)
+                    {
+                        File.AppendAllText(RegFile, msg);
+                        File.AppendAllLines(RegFile, new[] { "Se volverá a escribir otro mensaje cuando se vuelva al umbral aceptable" });
+                    }
+                    error = true;
                 }
-                error = true;
+                else
+                {
+                    msg = $"Local: {nowTime}, Remota: {networkTime} OK. {diff}ms.{Environment.NewLine}";
+                    if (error)
+                    {
+                        File.AppendAllText(RegFile, $"La hora vuelve a mantener el umbral aceptable.{Environment.NewLine}");
+                        File.AppendAllText(RegFile, msg);
+                    }
+                    error = false;
+                    Console.Write(msg);
+                }
             }
-            else
+            catch (Exception e) 
             {
-                msg = $"Local: {nowTime}, Remota: {networkTime} OK. {diff}ms.{Environment.NewLine}";
-                if (error)
-                {
-                    File.AppendAllText(RegFile, $"La hora vuelve a mantener el umbral aceptable.{Environment.NewLine}");
-                    File.AppendAllText(RegFile, msg);
-                }
-                error = false;
-                Console.Write(msg);
+                msg = $"Error en la recuperación de hora: {e.Message}";
+                Console.WriteLine (msg);
+                File.AppendAllText(RegFile, $"{DateTime.Now} {msg}{Environment.NewLine}");
             }
             Thread.Sleep(1000);
+
         }
 
     }
@@ -113,20 +123,59 @@ internal class Program
         Environment.Exit(1);
     }
 
-    public static DateTime GetNetworkTime(TimeSpan offset)
-    {
+    //public static DateTime GetNetworkTime(TimeSpan offset)
+    //{
 
+    //    var ntpData = new byte[48];
+    //    ntpData[0] = 0x1B; //LeapIndicator = 0 (no warning), VersionNum = 3 (IPv4 only), Mode = 3 (Client Mode)
+
+    //    var addresses = Dns.GetHostEntry(NtpServer ?? "").AddressList;
+    //    var ipEndPoint = new IPEndPoint(addresses[0], 123);
+    //    var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+
+    //    socket.Connect(ipEndPoint);
+    //    socket.Send(ntpData);
+    //    socket.Receive(ntpData);
+    //    socket.Close();
+
+    //    ulong intPart = (ulong)ntpData[40] << 24 | (ulong)ntpData[41] << 16 | (ulong)ntpData[42] << 8 | ntpData[43];
+    //    ulong fractPart = (ulong)ntpData[44] << 24 | (ulong)ntpData[45] << 16 | (ulong)ntpData[46] << 8 | ntpData[47];
+
+    //    var milliseconds = intPart * 1000 + fractPart * 1000 / 0x100000000L;
+    //    var networkDateTime = new DateTime(1900, 1, 1).AddMilliseconds((long)milliseconds);
+
+    //    return networkDateTime + offset;
+    //}
+
+    public static DateTime GetNetworkTime(TimeSpan offset, int timeoutMilliseconds)
+    {
         var ntpData = new byte[48];
-        ntpData[0] = 0x1B; //LeapIndicator = 0 (no warning), VersionNum = 3 (IPv4 only), Mode = 3 (Client Mode)
+        ntpData[0] = 0x1B; // LeapIndicator = 0 (no warning), VersionNum = 3 (IPv4 only), Mode = 3 (Client Mode)
 
         var addresses = Dns.GetHostEntry(NtpServer ?? "").AddressList;
         var ipEndPoint = new IPEndPoint(addresses[0], 123);
-        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
 
-        socket.Connect(ipEndPoint);
-        socket.Send(ntpData);
-        socket.Receive(ntpData);
-        socket.Close();
+        using (var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+        {
+            var cts = new CancellationTokenSource();
+            cts.CancelAfter(timeoutMilliseconds);
+
+            var task = Task.Run(() =>
+            {
+                socket.Connect(ipEndPoint);
+                socket.Send(ntpData);
+                socket.Receive(ntpData);
+            }, cts.Token);
+
+            try
+            {
+                task.Wait(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException("La operación superó el tiempo de respuesta esperado.");
+            }
+        }
 
         ulong intPart = (ulong)ntpData[40] << 24 | (ulong)ntpData[41] << 16 | (ulong)ntpData[42] << 8 | ntpData[43];
         ulong fractPart = (ulong)ntpData[44] << 24 | (ulong)ntpData[45] << 16 | (ulong)ntpData[46] << 8 | ntpData[47];
