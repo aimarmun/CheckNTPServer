@@ -1,6 +1,7 @@
 ﻿using System.Net.Sockets;
 using System.Net;
 using CheckNTPServer;
+using System.ComponentModel;
 
 internal class Program
 {
@@ -24,6 +25,11 @@ internal class Program
     /// </summary>
     public static Log Log { get; set; } = new(RegFile);
 
+    /// <summary>
+    /// Indica si hubo erroes anteriores
+    /// </summary>
+    public static bool HasPrevErrors { get; set; } = false;
+
     private static void Main(string[] args)
     {
         
@@ -44,7 +50,7 @@ internal class Program
             {
                 var networkTime = Ntp.GetNetworkTime(NtpServer, DateTimeOffset.Now.Offset, 3000);
                 var nowTime = DateTime.Now;
-                var diff = Math.Abs((networkTime - nowTime).TotalMilliseconds);
+                var diff = Math.Round(Math.Abs((networkTime - nowTime).TotalMilliseconds), 0);
                 if (diff >= MaxMillisOfDiff)
                 {
                     msg = $"Cuidado! Se ha pasado el umbral permitido! Local: {nowTime}, Remota: {networkTime}. Diferencia: {diff} milisegundos.";
@@ -67,11 +73,17 @@ internal class Program
                     error = false;
                     Console.WriteLine(msg);
                 }
+                if (HasPrevErrors)
+                {
+                    HasPrevErrors = false;
+                    Log.Write("Se ha recuperado de errores previos");
+                }
             }
             catch (Exception e) 
             {
                 msg = $"Error en la recuperación de hora: {e.Message}";
                 Log.Write(msg);
+                HasPrevErrors = true;
             }
             Thread.Sleep(1000);
 
